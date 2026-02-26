@@ -1,9 +1,41 @@
-{\rtf1\ansi\ansicpg1252\cocoartf2867
-\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
-{\colortbl;\red255\green255\blue255;}
-{\*\expandedcolortbl;;}
-\margl1440\margr1440\vieww50660\viewh21260\viewkind0
-\pard\tx566\tx1133\tx1700\tx2267\tx2834\tx3401\tx3968\tx4535\tx5102\tx5669\tx6236\tx6803\pardirnatural\partightenfactor0
+import os
+import subprocess
+import tempfile
+from flask import Flask, request, send_file, jsonify
 
-\f0\fs24 \cf0 flask==3.0.3\
-gunicorn==22.0.0}
+app = Flask(__name__)
+
+@app.post("/compile")
+def compile_latex():
+    data = request.get_json(silent=True) or {}
+    tex = data.get("tex", "")
+
+    if not tex or "\\documentclass" not in tex or "\\begin{document}" not in tex or "\\end{document}" not in tex:
+        return jsonify({"error": "Invalid LaTeX: expected a full document."}), 400
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tex_path = os.path.join(tmp, "main.tex")
+        with open(tex_path, "w", encoding="utf-8") as f:
+            f.write(tex)
+
+        try:
+            subprocess.run(
+                ["latexmk", "-pdf", "-interaction=nonstopmode", "-halt-on-error", "main.tex"],
+                cwd=tmp,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=60,
+            )
+        except subprocess.CalledProcessError as e:
+            log = e.stdout.decode("utf-8", errors="ignore")
+            return jsonify({"error": "Compilation failed", "log": log[:8000]}), 400
+        except subprocess.TimeoutExpired:
+            return jsonify({"error": "Compilation timed out"}), 408
+
+        pdf_path = os.path.join(tmp, "main.pdf")
+        return send_file(pdf_path, mimetype="application/pdf", as_attachment=True, download_name="resume.pdf")
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
